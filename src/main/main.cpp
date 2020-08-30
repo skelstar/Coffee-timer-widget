@@ -49,15 +49,36 @@ bool isIn(int *data, int len, int idx)
   return false;
 }
 
-int ring0[] = {12};
-int ring1[] = {6, 7, 8, 11, 13, 16, 17, 18};
-int ring2[] = {0, 1, 2, 3, 4, 5, 9, 10, 14, 15, 19, 20, 21, 22, 23, 24};
-
-void setRing(CRGB colour, int ring)
+enum Pattern
 {
-  switch (ring)
+  NONE,
+  MIDDLE_DOT,
+  INNER_RING,
+  INNER_RING_SOLID,
+  OUTER_RING,
+  OUTER_RING_THICK
+};
+
+int middle_dot[] = {12};
+int inner_ring[] = {6, 7, 8,
+                    11, 13,
+                    16, 17, 18};
+int outer_ring[] = {0, 1, 2, 3, 4,
+                    5, 9,
+                    10, 14,
+                    15, 19,
+                    20, 21, 22, 23, 24};
+int outer_ring_thick[] = {0, 1, 2, 3, 4,
+                          5, 6, 7, 8, 9,
+                          10, 11, 13, 14,
+                          15, 16, 17, 18, 19,
+                          20, 21, 22, 23, 24};
+
+void setPattern(CRGB colour, Pattern pattern)
+{
+  switch ((int)pattern)
   {
-  case 1:
+  case (int)MIDDLE_DOT:
   {
     setLeds(CRGB::Black, false);
     leds[12] = colour;
@@ -65,20 +86,39 @@ void setRing(CRGB colour, int ring)
     break;
   }
 
-  case 2:
+  case INNER_RING:
   {
     setLeds(CRGB::Black, false);
-    for (int i = 0; i < sizeof(ring1) / sizeof(ring1[0]); i++)
-      leds[ring1[i]] = colour;
+    for (int i = 0; i < sizeof(inner_ring) / sizeof(inner_ring[0]); i++)
+      leds[inner_ring[i]] = colour;
     FastLED.show();
     break;
   }
 
-  case 3:
+  case INNER_RING_SOLID:
   {
     setLeds(CRGB::Black, false);
-    for (int i = 0; i < sizeof(ring2) / sizeof(ring2[0]); i++)
-      leds[ring2[i]] = colour;
+    for (int i = 0; i < sizeof(inner_ring) / sizeof(inner_ring[0]); i++)
+      leds[inner_ring[i]] = colour;
+    leds[12] = colour;
+    FastLED.show();
+    break;
+  }
+
+  case OUTER_RING:
+  {
+    setLeds(CRGB::Black, false);
+    for (int i = 0; i < sizeof(outer_ring) / sizeof(outer_ring[0]); i++)
+      leds[outer_ring[i]] = colour;
+    FastLED.show();
+    break;
+  }
+
+  case OUTER_RING_THICK:
+  {
+    setLeds(CRGB::Black, false);
+    for (int i = 0; i < sizeof(outer_ring_thick) / sizeof(outer_ring_thick[0]); i++)
+      leds[outer_ring_thick[i]] = colour;
     FastLED.show();
     break;
   }
@@ -101,7 +141,9 @@ Fsm *lightsFsm;
 //------------------------------------------
 
 #define BLOOM_TIME_MS 30 * 1000
+#define BLOOM_TIME_ENDING_MS 5 * 1000
 #define FILL_AND_STIR_MS 90 * 1000
+#define FILL_AND_STIR_ENDING_MS 10 * 1000
 #define END_TIME_MS 10 * 1000
 
 // #define BLOOM_TIME_SECONDS 3
@@ -117,20 +159,36 @@ State stateStart(
       FastLED.addLeds<NEOPIXEL, LED_PIN>(leds, NUM_LEDS);
       FastLED.setBrightness(30);
 
-      setRing(CRGB::Green, 1);
+      setPattern(CRGB::Green, MIDDLE_DOT);
       sinceNextState = 0;
     });
 
 State stateBloom(
     [] {
       Serial.printf("State: stateBloom\n");
-      setRing(CRGB::Blue, 2);
+      setPattern(CRGB::Blue, INNER_RING);
       sinceNextState = 0;
+    },
+    [] {
+      if (sinceNextState > BLOOM_TIME_MS - BLOOM_TIME_ENDING_MS)
+      {
+        lightsFsm->trigger(EV_NEXT);
+        // sinceNextState = 0;
+      }
+    },
+    [] {
+    });
+
+State stateBloomEnding(
+    [] {
+      Serial.printf("State: stateBloomEnding\n");
+      setPattern(CRGB::Blue, INNER_RING_SOLID);
     },
     [] {
       if (sinceNextState > BLOOM_TIME_MS)
       {
         lightsFsm->trigger(EV_NEXT);
+        sinceNextState = 0;
       }
     },
     [] {
@@ -139,13 +197,28 @@ State stateBloom(
 State stateFillAndStir(
     [] {
       Serial.printf("State: stateFillAndStir\n");
-      sinceNextState = 0;
-      setRing(CRGB::Green, 3);
+      setPattern(CRGB::Green, OUTER_RING);
+    },
+    [] {
+      if (sinceNextState > FILL_AND_STIR_MS - FILL_AND_STIR_ENDING_MS)
+      {
+        lightsFsm->trigger(EV_NEXT);
+        // dont zero timer
+      }
+    },
+    [] {
+    });
+
+State stateFillAndStirEnding(
+    [] {
+      Serial.printf("State: stateFillAndStirEnding\n");
+      setPattern(CRGB::Green, OUTER_RING_THICK);
     },
     [] {
       if (sinceNextState > FILL_AND_STIR_MS)
       {
         lightsFsm->trigger(EV_NEXT);
+        sinceNextState = 0;
       }
     },
     [] {
@@ -154,7 +227,6 @@ State stateFillAndStir(
 State stateEnd(
     [] {
       Serial.printf("State: stateEnd\n");
-      sinceNextState = 0;
       setLeds(CRGB::Red);
     },
     [] {
@@ -172,8 +244,10 @@ State stateOff([] {
 void addLightsFsmStateTransitions()
 {
   lightsFsm->add_transition(&stateStart, &stateBloom, EV_BUTTON_PRESSED, NULL);
-  lightsFsm->add_transition(&stateBloom, &stateFillAndStir, EV_NEXT, NULL);
-  lightsFsm->add_transition(&stateFillAndStir, &stateEnd, EV_NEXT, NULL);
+  lightsFsm->add_transition(&stateBloom, &stateBloomEnding, EV_NEXT, NULL);
+  lightsFsm->add_transition(&stateBloomEnding, &stateFillAndStir, EV_NEXT, NULL);
+  lightsFsm->add_transition(&stateFillAndStir, &stateFillAndStirEnding, EV_NEXT, NULL);
+  lightsFsm->add_transition(&stateFillAndStirEnding, &stateEnd, EV_NEXT, NULL);
   lightsFsm->add_transition(&stateEnd, &stateOff, EV_NEXT, NULL);
 }
 
