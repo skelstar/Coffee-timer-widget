@@ -5,8 +5,7 @@
 // #include "Debug.hpp"
 
 #include <Arduino.h>
-
-#include <Fsm.h>
+#include <elapsedMillis.h>
 
 //--------------------------------------------
 
@@ -33,35 +32,114 @@ void setLeds(CRGB colour)
 enum CommsStateEvent
 {
   EV_COMMS_NO_EVENT,
-  EV_COMMS_PKT_RXD,
-  EV_COMMS_BOARD_TIMEDOUT,
-  EV_COMMS_BD_FIRST_PACKET,
+  EV_BUTTON_PRESSED,
+  EV_NEXT,
 };
 
-Fsm *commsFsm;
+Fsm *lightsFsm;
 
-void addCommsStateTransitions()
+//------------------------------------------
+
+elapsedMillis sinceNextState = 0;
+
+State stateStart(
+    [] {
+      Serial.printf("State: stateStart\n");
+
+      FastLED.addLeds<NEOPIXEL, LED_PIN>(leds, NUM_LEDS);
+      FastLED.setBrightness(30);
+
+      setLeds(CRGB::Black);
+      sinceNextState = 0;
+    });
+
+State stateBloom(
+    [] {
+      Serial.printf("State: stateBloom\n");
+      sinceNextState = 0;
+      setLeds(CRGB::Blue);
+    },
+    [] {
+      if (sinceNextState > 2000)
+      {
+        lightsFsm->trigger(EV_NEXT);
+      }
+    },
+    [] {
+    });
+
+State stateFillAndStir(
+    [] {
+      Serial.printf("State: stateFillAndStir\n");
+      sinceNextState = 0;
+      setLeds(CRGB::Green);
+    },
+    [] {
+      if (sinceNextState > 5000)
+      {
+        lightsFsm->trigger(EV_NEXT);
+      }
+    },
+    [] {
+    });
+
+State stateEnd(
+    [] {
+      Serial.printf("State: stateEnd\n");
+      sinceNextState = 0;
+      setLeds(CRGB::Red);
+    },
+    [] {
+      if (sinceNextState > 2000)
+      {
+        lightsFsm->trigger(EV_NEXT);
+      }
+    },
+    [] {});
+
+State stateOff([] {
+  Serial.printf("State: stateOff\n");
+});
+
+void addLightsFsmStateTransitions()
 {
-  // EV_COMMS_PKT_RXD
-  // commsFsm->add_transition(&stateCommsSearching, &stateCommsConnected, EV_COMMS_PKT_RXD, NULL);
-  // commsFsm->add_transition(&stateCommsDisconnected, &stateCommsConnected, EV_COMMS_PKT_RXD, NULL);
-
-  // // EV_COMMS_BOARD_TIMEDOUT
-  // commsFsm->add_transition(&stateCommsConnected, &stateCommsDisconnected, EV_COMMS_BOARD_TIMEDOUT, NULL);
-
-  // // EV_COMMS_BD_RESET
-  // commsFsm->add_transition(&stateCommsConnected, &stateCommsConnected, EV_COMMS_BD_FIRST_PACKET, NULL);
-  // commsFsm->add_transition(&stateCommsDisconnected, &stateCommsDisconnected, EV_COMMS_BD_FIRST_PACKET, NULL);
+  lightsFsm->add_transition(&stateStart, &stateBloom, EV_BUTTON_PRESSED, NULL);
+  lightsFsm->add_transition(&stateBloom, &stateFillAndStir, EV_NEXT, NULL);
+  lightsFsm->add_transition(&stateFillAndStir, &stateEnd, EV_NEXT, NULL);
+  lightsFsm->add_transition(&stateEnd, &stateOff, EV_NEXT, NULL);
 }
+
+//--------------------------------------------
+
+#include <Button2.h>
+
+Button2 button(39);
+
+void buttonClicked(Button2 &btn)
+{
+  Serial.printf("button clicked!\n");
+
+  lightsFsm->trigger(EV_BUTTON_PRESSED);
+}
+
+//------------------------------------------
 
 void setup()
 {
   Serial.begin(115200);
   Serial.printf("Ready\n");
 
-  // commsFsm = new Fsm(&stateCommsSearching);
+  button.setPressedHandler(buttonClicked);
+
+  lightsFsm = new Fsm(&stateStart);
+  addLightsFsmStateTransitions();
 }
 
 void loop()
 {
+  lightsFsm->run_machine();
+
+  button.loop();
+
+  vTaskDelay(10);
 }
